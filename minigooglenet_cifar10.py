@@ -1,20 +1,31 @@
 from nn.minigooglenet import MiniGoogLeNet
-from callbacks.custom_callbacks import LogLearningRate
+from callbacks.custom_callbacks import (
+    AdjustLearningRate,
+    AdjustBatchSize,
+    LogBatchSize,
+    TrainingMonitor)
 from sklearn.metrics import classification_report
 from sklearn.preprocessing import LabelBinarizer
-from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import LearningRateScheduler
+from keras.callbacks import LearningRateScheduler, EarlyStopping
 from keras.optimizers import SGD
 from keras.datasets import cifar10
 import numpy as np
 import argparse
+import math
 import os
 
 
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 MAX_EPOCHS = 70
-INITIAL_LR = 1e-2
+INITIAL_LR = 1e-1
 CLASSES = ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
+
+
+def step_decay(epoch):
+   drop = 0.2
+   epochs_drop = 5.0
+   lrate = INITIAL_LR * math.pow(drop, math.floor((1+epoch)/epochs_drop))
+   return lrate
 
 
 def polynomial_decay(epoch):
@@ -24,9 +35,18 @@ def polynomial_decay(epoch):
        epoch = current epoch
        max_epochs = total number of epochs
        p = polynomial"""
-
     p = 2.0
     return INITIAL_LR * (1-(epoch/float(MAX_EPOCHS)))**p
+
+
+def batchsize_incrementer(epoch):
+    factor = 5
+    dropEvery = 5
+    if epoch == 0:
+        return BATCH_SIZE
+    if epoch % 5 == 0:
+        return BATCH_SIZE * (epoch // dropEvery) * factor
+    return 0
 
 
 parser = argparse.ArgumentParser()
@@ -43,24 +63,20 @@ lb = LabelBinarizer()
 y_train = lb.fit_transform(y_train)
 y_test = lb.fit_transform(y_test)
 
-# Data Augmentation
-aug = ImageDataGenerator(width_shift_range=0.1,
-                         height_shift_range=0.1,
-                         horizontal_flip=True,
-                         fill_mode="nearest")
-
-# Changing learning rate based on a polynomial decay wrt current epoch
-lr_log = LogLearningRate(args["output"])
-callbacks = [LearningRateScheduler(polynomial_decay), lr_log]
+callbacks = [AdjustLearningRate(step_decay),
+             #AdjustBatchSize(batchsize_incrementer),
+             #LogBatchSize(args["output"]),
+             TrainingMonitor("learning_rate", os.path.sep.join([args["output"], "{}".format(os.getpid())])),
+             EarlyStopping(patience=10)]
 
 optimizer = SGD(lr=INITIAL_LR, momentum=0.9)
 model = MiniGoogLeNet.build(width=32, height=32, depth=3, classes=10)
 model.compile(optimizer=optimizer,
               loss="categorical_crossentropy",
               metrics=["accuracy"])
-H = model.fit_generator(aug.flow(X_train, y_train, batch_size=BATCH_SIZE),
+
+H = model.fit(X_train, y_train, batch_size=BATCH_SIZE,
                         validation_data=(X_test, y_test),
-                        steps_per_epoch=len(X_train)//BATCH_SIZE,
                         epochs=MAX_EPOCHS,
                         callbacks=callbacks,
                         verbose=1)
